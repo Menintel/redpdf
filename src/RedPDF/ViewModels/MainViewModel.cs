@@ -1,8 +1,11 @@
+using System.Collections.ObjectModel;
 using System.IO;
-using System.Windows.Input;
+using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
+using RedPDF.Models;
+using RedPDF.Services;
 
 namespace RedPDF.ViewModels;
 
@@ -12,6 +15,9 @@ namespace RedPDF.ViewModels;
 /// </summary>
 public partial class MainViewModel : ViewModelBase
 {
+    private readonly IPdfService _pdfService;
+    private readonly ICacheService _cacheService;
+
     [ObservableProperty]
     private string _currentFilePath = string.Empty;
 
@@ -36,13 +42,28 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private string _statusMessage = "Ready";
 
-    public MainViewModel()
+    [ObservableProperty]
+    private PdfDocumentModel? _currentDocument;
+
+    [ObservableProperty]
+    private ObservableCollection<PageThumbnailViewModel> _pageThumbnails = [];
+
+    [ObservableProperty]
+    private PageThumbnailViewModel? _selectedThumbnail;
+
+    public MainViewModel() : this(new PdfService(), new PageCacheService())
     {
+    }
+
+    public MainViewModel(IPdfService pdfService, ICacheService cacheService)
+    {
+        _pdfService = pdfService;
+        _cacheService = cacheService;
         Title = "RedPDF";
     }
 
     [RelayCommand]
-    private void OpenFile()
+    private async Task OpenFileAsync()
     {
         var dialog = new OpenFileDialog
         {
@@ -52,18 +73,22 @@ public partial class MainViewModel : ViewModelBase
 
         if (dialog.ShowDialog() == true)
         {
-            LoadDocument(dialog.FileName);
+            await LoadDocumentAsync(dialog.FileName);
         }
     }
 
     [RelayCommand]
     private void CloseFile()
     {
+        _pdfService.CloseDocument();
         CurrentFilePath = string.Empty;
         FileName = "RedPDF";
+        Title = "RedPDF";
         IsDocumentLoaded = false;
         CurrentPage = 0;
         TotalPages = 0;
+        CurrentDocument = null;
+        PageThumbnails.Clear();
         StatusMessage = "Ready";
     }
 
@@ -118,14 +143,16 @@ public partial class MainViewModel : ViewModelBase
     [RelayCommand]
     private void FitWidth()
     {
-        // Will be implemented with actual viewer
+        // Will be implemented with actual viewer dimensions
+        ZoomLevel = 100;
         StatusMessage = "Fit to width";
     }
 
     [RelayCommand]
     private void FitPage()
     {
-        // Will be implemented with actual viewer
+        // Will be implemented with actual viewer dimensions
+        ZoomLevel = 100;
         StatusMessage = "Fit to page";
     }
 
@@ -137,29 +164,72 @@ public partial class MainViewModel : ViewModelBase
 
     private bool CanNavigate() => IsDocumentLoaded && TotalPages > 0;
 
-    private void LoadDocument(string filePath)
+    private async Task LoadDocumentAsync(string filePath)
     {
         try
         {
             IsBusy = true;
+            StatusMessage = "Loading document...";
+
+            CurrentDocument = await _pdfService.OpenDocumentAsync(filePath);
+
             CurrentFilePath = filePath;
-            FileName = Path.GetFileName(filePath);
+            FileName = CurrentDocument.FileName;
             Title = $"{FileName} - RedPDF";
-            
-            // TODO: Actually load the PDF and get page count
-            // For now, simulate loading
-            TotalPages = 1;
+            TotalPages = CurrentDocument.PageCount;
             CurrentPage = 1;
             IsDocumentLoaded = true;
-            StatusMessage = $"Loaded: {FileName}";
+
+            // Load thumbnails
+            await LoadThumbnailsAsync();
+
+            StatusMessage = $"Loaded: {FileName} ({TotalPages} pages)";
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Error: {ex.Message}";
+            var errorMsg = ex.InnerException?.Message ?? ex.Message;
+            StatusMessage = $"Error: {errorMsg}";
+            System.Diagnostics.Debug.WriteLine($"PDF Load Error: {ex}");
+            System.Windows.MessageBox.Show(
+                $"Failed to open PDF:\n\n{errorMsg}\n\nDetails: {ex.GetType().Name}",
+                "Error Opening PDF",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
+            IsDocumentLoaded = false;
         }
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    private async Task LoadThumbnailsAsync()
+    {
+        PageThumbnails.Clear();
+
+        if (CurrentDocument == null)
+            return;
+
+        for (int i = 0; i < CurrentDocument.PageCount; i++)
+        {
+            var thumbnail = new PageThumbnailViewModel
+            {
+                PageIndex = i,
+                PageNumber = i + 1
+            };
+
+            PageThumbnails.Add(thumbnail);
+
+            // Load thumbnail asynchronously
+            try
+            {
+                var thumbImage = await _pdfService.RenderThumbnailAsync(i, 80);
+                thumbnail.ThumbnailImage = thumbImage;
+            }
+            catch
+            {
+                // Ignore thumbnail rendering errors
+            }
         }
     }
 
@@ -170,6 +240,12 @@ public partial class MainViewModel : ViewModelBase
         PreviousPageCommand.NotifyCanExecuteChanged();
         FirstPageCommand.NotifyCanExecuteChanged();
         LastPageCommand.NotifyCanExecuteChanged();
+
+        // Update selected thumbnail
+        if (value > 0 && value <= PageThumbnails.Count)
+        {
+            SelectedThumbnail = PageThumbnails[value - 1];
+        }
     }
 
     partial void OnIsDocumentLoadedChanged(bool value)
@@ -184,4 +260,27 @@ public partial class MainViewModel : ViewModelBase
     {
         StatusMessage = $"Zoom: {value:F0}%";
     }
+
+    partial void OnSelectedThumbnailChanged(PageThumbnailViewModel? value)
+    {
+        if (value != null && CurrentPage != value.PageNumber)
+        {
+            CurrentPage = value.PageNumber;
+        }
+    }
+}
+
+/// <summary>
+/// View model for page thumbnails in the sidebar.
+/// </summary>
+public partial class PageThumbnailViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private int _pageIndex;
+
+    [ObservableProperty]
+    private int _pageNumber;
+
+    [ObservableProperty]
+    private BitmapSource? _thumbnailImage;
 }
