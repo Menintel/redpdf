@@ -8,6 +8,18 @@
     <UseWPF>true</UseWPF>
     <PlatformTarget>x64</PlatformTarget>
     <DocnetRuntime>win-x64</DocnetRuntime>
+    
+    <!-- Version Info -->
+    <Version>0.0.0</Version>
+    <AssemblyVersion>0.0.0.0</AssemblyVersion>
+    <FileVersion>0.0.0.0</FileVersion>
+    
+    <!-- Product Info -->
+    <Product>RedPDF</Product>
+    <Authors>Menintel</Authors>
+    <Company>Menintel</Company>
+    <Description>A modern, lightweight PDF viewer for Windows</Description>
+    <Copyright>Copyright © 2026 Menintel</Copyright>
   </PropertyGroup>
 
   <ItemGroup>
