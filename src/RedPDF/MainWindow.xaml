@@ -42,6 +42,12 @@
         
         <!-- UI Toggle -->
         <KeyBinding Key="B" Modifiers="Ctrl" Command="{Binding ToggleSidebarCommand}"/>
+        
+        <!-- Search -->
+        <KeyBinding Key="F" Modifiers="Ctrl" Command="{Binding ToggleSearchCommand}"/>
+        <KeyBinding Key="F3" Command="{Binding NextSearchResultCommand}"/>
+        <KeyBinding Key="F3" Modifiers="Shift" Command="{Binding PreviousSearchResultCommand}"/>
+        <KeyBinding Key="Escape" Command="{Binding ToggleSearchCommand}"/>
     </Window.InputBindings>
 
     <Grid Background="#1E1E1E">
@@ -86,7 +92,7 @@
                            Command="{Binding OpenFileCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="📂" FontSize="16"/>
+                    <Image Source="{StaticResource FolderOpenIcon}" Width="16" Height="16"/>
                 </ui:Button>
                 
                 <Border Width="1" Background="#3C3C3C" Margin="8,6"/>
@@ -96,13 +102,13 @@
                            Command="{Binding FirstPageCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="⏮" FontSize="14"/>
+                    <Image Source="{StaticResource ChevronFirstIcon}" Width="16" Height="16"/>
                 </ui:Button>
                 <ui:Button ToolTip="Previous Page" 
                            Command="{Binding PreviousPageCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="◀" FontSize="14"/>
+                    <Image Source="{StaticResource ChevronLeftIcon}" Width="16" Height="16"/>
                 </ui:Button>
                 
                 <!-- Page Indicator -->
@@ -118,13 +124,13 @@
                            Command="{Binding NextPageCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="▶" FontSize="14"/>
+                    <Image Source="{StaticResource ChevronRightIcon}" Width="16" Height="16"/>
                 </ui:Button>
                 <ui:Button ToolTip="Last Page" 
                            Command="{Binding LastPageCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="⏭" FontSize="14"/>
+                    <Image Source="{StaticResource ChevronLastIcon}" Width="16" Height="16"/>
                 </ui:Button>
                 
                 <Border Width="1" Background="#3C3C3C" Margin="8,6"/>
@@ -134,7 +140,7 @@
                            Command="{Binding ZoomOutCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="➖" FontSize="14"/>
+                    <Image Source="{StaticResource ZoomOutIcon}" Width="16" Height="16"/>
                 </ui:Button>
                 
                 <Border Background="#3C3C3C" CornerRadius="4" Padding="12,4" Margin="4,0" 
@@ -149,7 +155,7 @@
                            Command="{Binding ZoomInCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="➕" FontSize="14"/>
+                    <Image Source="{StaticResource ZoomInIcon}" Width="16" Height="16"/>
                 </ui:Button>
                 
                 <Border Width="1" Background="#3C3C3C" Margin="8,6"/>
@@ -159,8 +165,88 @@
                            Command="{Binding ToggleSidebarCommand}"
                            Appearance="Secondary"
                            Margin="2">
-                    <TextBlock Text="☰" FontSize="16"/>
+                    <Image Source="{StaticResource MenuIcon}" Width="16" Height="16"/>
                 </ui:Button>
+                
+                <Border Width="1" Background="#3C3C3C" Margin="8,6"/>
+                
+                <!-- Search Button -->
+                <ui:Button ToolTip="Search (Ctrl+F)" 
+                           Command="{Binding ToggleSearchCommand}"
+                           Appearance="Secondary"
+                           Margin="2">
+                    <Image Source="{StaticResource SearchIcon}" Width="16" Height="16"/>
+                </ui:Button>
+                
+                <!-- Search Bar (Expandable) -->
+                <Border Background="#3C3C3C" 
+                        CornerRadius="4" 
+                        Padding="4,2" 
+                        Margin="4,0"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding IsSearchVisible, Converter={StaticResource BoolToVisibility}}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBox x:Name="SearchTextBox"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="200"
+                                 Background="Transparent"
+                                 Foreground="#CCCCCC"
+                                 BorderThickness="0"
+                                 VerticalAlignment="Center"
+                                 Padding="4,4">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter" Command="{Binding SearchCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        
+                        <!-- Search Execute Button -->
+                        <ui:Button ToolTip="Search"
+                                   Command="{Binding SearchCommand}"
+                                   Appearance="Secondary"
+                                   Padding="4,2"
+                                   Margin="2,0">
+                            <Image Source="{StaticResource EnterIcon}" Width="14" Height="14"/>
+                        </ui:Button>
+                        
+                        <!-- Result Navigation -->
+                        <Border Width="1" Background="#5C5C5C" Margin="4,4"/>
+                        
+                        <TextBlock VerticalAlignment="Center" 
+                                   Foreground="#8A8A8A" 
+                                   FontSize="11"
+                                   Margin="4,0"
+                                   Visibility="{Binding IsDocumentLoaded, Converter={StaticResource BoolToVisibility}}">
+                            <Run Text="{Binding CurrentResultIndex}"/>
+                            <Run Text="/"/>
+                            <Run Text="{Binding TotalResults}"/>
+                        </TextBlock>
+                        
+                        <ui:Button ToolTip="Previous (Shift+F3)"
+                                   Command="{Binding PreviousSearchResultCommand}"
+                                   Appearance="Secondary"
+                                   Padding="4,2"
+                                   Margin="2,0">
+                            <Image Source="{StaticResource ChevronUpIcon}" Width="12" Height="12"/>
+                        </ui:Button>
+                        
+                        <ui:Button ToolTip="Next (F3)"
+                                   Command="{Binding NextSearchResultCommand}"
+                                   Appearance="Secondary"
+                                   Padding="4,2"
+                                   Margin="2,0">
+                            <Image Source="{StaticResource ChevronDownIcon}" Width="12" Height="12"/>
+                        </ui:Button>
+                        
+                        <!-- Close Search -->
+                        <ui:Button ToolTip="Close (Esc)"
+                                   Command="{Binding ToggleSearchCommand}"
+                                   Appearance="Secondary"
+                                   Padding="4,2"
+                                   Margin="2,0">
+                            <Image Source="{StaticResource CloseIcon}" Width="12" Height="12"/>
+                        </ui:Button>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Border>
         

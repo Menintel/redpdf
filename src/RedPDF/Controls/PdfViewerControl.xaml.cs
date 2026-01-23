@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Docnet.Core;
 using Docnet.Core.Models;
 using RedPDF.Models;
@@ -15,13 +16,22 @@ namespace RedPDF.Controls;
 
 /// <summary>
 /// Custom control for rendering and displaying PDF pages.
-/// Supports zooming, scrolling, and virtual rendering.
+/// Supports zooming, scrolling, and virtual rendering with optimizations.
 /// </summary>
 public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 {
     private readonly ICacheService _cacheService;
     private double _zoomLevel = 1.0;
     private int _currentPage;
+    
+    // Virtual scrolling optimization
+    private readonly DispatcherTimer _scrollDebounceTimer;
+    private CancellationTokenSource? _renderCts;
+    private readonly object _renderLock = new();
+    private bool _isRendering;
+    private const int ScrollDebounceMs = 100;
+    private const int PageBufferSize = 3; // Pages to keep before/after viewport
+    private const int MaxConcurrentRenders = 4;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -78,6 +88,13 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 
         PagesContainer.ItemsSource = Pages;
 
+        // Setup scroll debounce timer
+        _scrollDebounceTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(ScrollDebounceMs)
+        };
+        _scrollDebounceTimer.Tick += OnScrollDebounceTimerTick;
+
         // Subscribe to scroll events for virtual rendering
         PageScrollViewer.ScrollChanged += OnScrollChanged;
     }
@@ -95,7 +112,9 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         if (d is PdfViewerControl control)
         {
             control._zoomLevel = (double)e.NewValue / 100.0;
-            control.RefreshVisiblePages();
+            // Clear all rendered images on zoom change (they'll be re-rendered at new scale)
+            control.InvalidateAllPages();
+            control.ScheduleRender();
         }
     }
 
@@ -107,8 +126,23 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Invalidates all rendered pages, forcing them to re-render.
+    /// </summary>
+    private void InvalidateAllPages()
+    {
+        foreach (var page in Pages)
+        {
+            page.RenderedImage = null;
+            page.RenderedScale = 0;
+        }
+    }
+
     private async void LoadDocumentAsync()
     {
+        // Cancel any pending renders
+        CancelPendingRenders();
+        
         if (Document == null)
         {
             Pages.Clear();
@@ -121,7 +155,7 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         {
             Pages.Clear();
 
-            // Create page view models
+            // Create page view models with placeholder heights
             foreach (var page in Document.Pages)
             {
                 Pages.Add(new PageViewModel
@@ -145,9 +179,29 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         }
     }
 
-    private async void RefreshVisiblePages()
+    /// <summary>
+    /// Schedules a render operation with debouncing.
+    /// </summary>
+    private void ScheduleRender()
     {
+        _scrollDebounceTimer.Stop();
+        _scrollDebounceTimer.Start();
+    }
+
+    private async void OnScrollDebounceTimerTick(object? sender, EventArgs e)
+    {
+        _scrollDebounceTimer.Stop();
         await RenderVisiblePagesAsync();
+    }
+
+    /// <summary>
+    /// Cancels any pending render operations.
+    /// </summary>
+    private void CancelPendingRenders()
+    {
+        _renderCts?.Cancel();
+        _renderCts?.Dispose();
+        _renderCts = new CancellationTokenSource();
     }
 
     private async Task RenderVisiblePagesAsync()
@@ -155,39 +209,128 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         if (Document == null || Pages.Count == 0)
             return;
 
-        // Get visible page indices
-        var visibleIndices = GetVisiblePageIndices();
-
-        // Add buffer pages (2 before and after)
-        var indicesToRender = new HashSet<int>();
-        foreach (var index in visibleIndices)
+        // Prevent concurrent render operations
+        lock (_renderLock)
         {
-            for (int i = Math.Max(0, index - 2); i <= Math.Min(Pages.Count - 1, index + 2); i++)
+            if (_isRendering)
             {
-                indicesToRender.Add(i);
+                // Schedule another render after current one completes
+                ScheduleRender();
+                return;
             }
+            _isRendering = true;
         }
 
-        // Render each page
-        foreach (var index in indicesToRender)
+        // Cancel any pending renders
+        CancelPendingRenders();
+        var cancellationToken = _renderCts!.Token;
+
+        try
         {
-            var pageVm = Pages[index];
-            if (pageVm.RenderedImage == null || pageVm.RenderedScale != _zoomLevel)
+            // Get visible page indices
+            var visibleIndices = GetVisiblePageIndices();
+
+            // Build set of pages to render (visible + buffer)
+            var indicesToRender = new HashSet<int>();
+            foreach (var index in visibleIndices)
             {
+                for (int i = Math.Max(0, index - PageBufferSize); 
+                     i <= Math.Min(Pages.Count - 1, index + PageBufferSize); 
+                     i++)
+                {
+                    indicesToRender.Add(i);
+                }
+            }
+
+            // Unload pages that are far from viewport to save memory
+            UnloadDistantPages(indicesToRender);
+
+            // Get pages that need rendering
+            var pagesToRender = indicesToRender
+                .Where(i => Pages[i].RenderedImage == null || Pages[i].RenderedScale != _zoomLevel)
+                .OrderBy(i => Math.Abs(i - visibleIndices.FirstOrDefault())) // Prioritize closest to viewport
+                .ToList();
+
+            if (pagesToRender.Count == 0)
+                return;
+
+            // Render pages in parallel with limited concurrency
+            var semaphore = new SemaphoreSlim(MaxConcurrentRenders);
+            var tasks = pagesToRender.Select(async index =>
+            {
+                await semaphore.WaitAsync(cancellationToken);
                 try
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+
+                    var pageVm = Pages[index];
+                    
+                    // Double-check if still needs rendering
+                    if (pageVm.RenderedImage != null && pageVm.RenderedScale == _zoomLevel)
+                        return;
+
                     var bitmap = await _cacheService.GetOrRenderAsync(
                         Document.Id,
                         index,
                         _zoomLevel,
-                        () => RenderPageDirectlyAsync(index, _zoomLevel));
+                        () => RenderPageDirectlyAsync(index, _zoomLevel, cancellationToken));
 
-                    pageVm.RenderedImage = bitmap;
-                    pageVm.RenderedScale = _zoomLevel;
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        // Update on UI thread
+                        await Dispatcher.InvokeAsync(() =>
+                        {
+                            pageVm.RenderedImage = bitmap;
+                            pageVm.RenderedScale = _zoomLevel;
+                        });
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected when scrolling fast
                 }
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"Failed to render page {index}: {ex.Message}");
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
+        finally
+        {
+            lock (_renderLock)
+            {
+                _isRendering = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Unloads rendered images from pages far from the viewport to save memory.
+    /// </summary>
+    private void UnloadDistantPages(HashSet<int> keepIndices)
+    {
+        const int unloadThreshold = 10; // Pages beyond this distance get unloaded
+        
+        for (int i = 0; i < Pages.Count; i++)
+        {
+            if (!keepIndices.Contains(i))
+            {
+                // Check if page is far from any kept page
+                int minDistance = keepIndices.Count > 0 
+                    ? keepIndices.Min(k => Math.Abs(k - i)) 
+                    : int.MaxValue;
+                    
+                if (minDistance > unloadThreshold && Pages[i].RenderedImage != null)
+                {
+                    Pages[i].RenderedImage = null;
+                    Pages[i].RenderedScale = 0;
                 }
             }
         }
@@ -196,7 +339,7 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
     /// <summary>
     /// Renders a page directly using Docnet, without relying on shared service state.
     /// </summary>
-    private Task<BitmapSource> RenderPageDirectlyAsync(int pageIndex, double scale)
+    private Task<BitmapSource> RenderPageDirectlyAsync(int pageIndex, double scale, CancellationToken cancellationToken = default)
     {
         // Capture document info on UI thread before entering background task
         var doc = Document;
@@ -213,10 +356,14 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 
         return Task.Run(() =>
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            
             // Create a reader directly with the document file
             using var docReader = DocLib.Instance.GetDocReader(
                 filePath,
                 new PageDimensions(targetWidth, targetHeight));
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             using var pageReader = docReader.GetPageReader(pageIndex);
 
@@ -224,8 +371,10 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
             int renderWidth = pageReader.GetPageWidth();
             int renderHeight = pageReader.GetPageHeight();
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             return ConvertToBitmapSource(rawBytes, renderWidth, renderHeight);
-        });
+        }, cancellationToken);
     }
 
     private static BitmapSource ConvertToBitmapSource(byte[] rawBytes, int width, int height)
@@ -287,7 +436,8 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
     {
         if (Math.Abs(e.VerticalChange) > 0.1)
         {
-            RefreshVisiblePages();
+            // Debounce scroll events to avoid excessive rendering
+            ScheduleRender();
             UpdateCurrentPageFromScroll();
         }
     }

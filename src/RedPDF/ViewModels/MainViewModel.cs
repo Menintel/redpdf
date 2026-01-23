@@ -51,6 +51,28 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private PageThumbnailViewModel? _selectedThumbnail;
 
+    // Search properties
+    [ObservableProperty]
+    private string _searchText = string.Empty;
+
+    [ObservableProperty]
+    private bool _isSearchVisible;
+
+    [ObservableProperty]
+    private bool _isSearching;
+
+    [ObservableProperty]
+    private ObservableCollection<SearchResultViewModel> _searchResults = [];
+
+    [ObservableProperty]
+    private SearchResultViewModel? _selectedSearchResult;
+
+    [ObservableProperty]
+    private int _currentResultIndex;
+
+    [ObservableProperty]
+    private int _totalResults;
+
     public MainViewModel() : this(new PdfService(), new PageCacheService())
     {
     }
@@ -174,6 +196,126 @@ public partial class MainViewModel : ViewModelBase
         IsSidebarVisible = !IsSidebarVisible;
     }
 
+    #region Search Commands
+
+    [RelayCommand]
+    private void ToggleSearch()
+    {
+        IsSearchVisible = !IsSearchVisible;
+        if (!IsSearchVisible)
+        {
+            ClearSearch();
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSearch))]
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(SearchText) || CurrentDocument == null)
+            return;
+
+        try
+        {
+            IsSearching = true;
+            StatusMessage = $"Searching for '{SearchText}'...";
+            SearchResults.Clear();
+            CurrentResultIndex = 0;
+            TotalResults = 0;
+
+            var results = await _pdfService.SearchAsync(SearchText, caseSensitive: false);
+            var resultList = results.ToList();
+
+            int index = 1;
+            foreach (var result in resultList)
+            {
+                SearchResults.Add(new SearchResultViewModel
+                {
+                    PageIndex = result.PageIndex,
+                    PageNumber = result.PageIndex + 1,
+                    MatchedText = result.MatchedText,
+                    ContextText = $"Page {result.PageIndex + 1}",
+                    ResultIndex = index++
+                });
+            }
+
+            TotalResults = SearchResults.Count;
+            
+            // Notify navigation commands that they may now be executable
+            NextSearchResultCommand.NotifyCanExecuteChanged();
+            PreviousSearchResultCommand.NotifyCanExecuteChanged();
+            
+            if (TotalResults > 0)
+            {
+                CurrentResultIndex = 1;
+                SelectedSearchResult = SearchResults[0];
+                StatusMessage = $"Found {TotalResults} result(s) for '{SearchText}'";
+            }
+            else
+            {
+                StatusMessage = $"No results found for '{SearchText}'";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Search error: {ex.Message}";
+        }
+        finally
+        {
+            IsSearching = false;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanNavigateResults))]
+    private void NextSearchResult()
+    {
+        if (SearchResults.Count == 0) return;
+        
+        CurrentResultIndex = CurrentResultIndex >= TotalResults ? 1 : CurrentResultIndex + 1;
+        SelectedSearchResult = SearchResults[CurrentResultIndex - 1];
+    }
+
+    [RelayCommand(CanExecute = nameof(CanNavigateResults))]
+    private void PreviousSearchResult()
+    {
+        if (SearchResults.Count == 0) return;
+        
+        CurrentResultIndex = CurrentResultIndex <= 1 ? TotalResults : CurrentResultIndex - 1;
+        SelectedSearchResult = SearchResults[CurrentResultIndex - 1];
+    }
+
+    [RelayCommand]
+    private void ClearSearch()
+    {
+        SearchText = string.Empty;
+        SearchResults.Clear();
+        CurrentResultIndex = 0;
+        TotalResults = 0;
+        SelectedSearchResult = null;
+        
+        // Disable navigation commands
+        NextSearchResultCommand.NotifyCanExecuteChanged();
+        PreviousSearchResultCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanSearch() => IsDocumentLoaded && !string.IsNullOrWhiteSpace(SearchText);
+    private bool CanNavigateResults() => SearchResults.Count > 0;
+
+    partial void OnSelectedSearchResultChanged(SearchResultViewModel? value)
+    {
+        if (value != null)
+        {
+            CurrentPage = value.PageNumber;
+            StatusMessage = $"Result {value.ResultIndex} of {TotalResults} on page {value.PageNumber}";
+        }
+    }
+
+    partial void OnSearchTextChanged(string value)
+    {
+        SearchCommand.NotifyCanExecuteChanged();
+    }
+
+    #endregion
+
     private bool CanNavigate() => IsDocumentLoaded && TotalPages > 0;
 
     private async Task LoadDocumentAsync(string filePath)
@@ -190,7 +332,7 @@ public partial class MainViewModel : ViewModelBase
             System.Diagnostics.Debug.WriteLine($"PDF opened successfully: {CurrentDocument?.PageCount} pages");
 
             CurrentFilePath = filePath;
-            FileName = CurrentDocument.FileName;
+            FileName = CurrentDocument!.FileName;
             Title = $"{FileName} - RedPDF";
             TotalPages = CurrentDocument.PageCount;
             CurrentPage = 1;
@@ -305,4 +447,25 @@ public partial class PageThumbnailViewModel : ObservableObject
 
     [ObservableProperty]
     private BitmapSource? _thumbnailImage;
+}
+
+/// <summary>
+/// View model for search results.
+/// </summary>
+public partial class SearchResultViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private int _pageIndex;
+
+    [ObservableProperty]
+    private int _pageNumber;
+
+    [ObservableProperty]
+    private string _matchedText = string.Empty;
+
+    [ObservableProperty]
+    private string _contextText = string.Empty;
+
+    [ObservableProperty]
+    private int _resultIndex;
 }
