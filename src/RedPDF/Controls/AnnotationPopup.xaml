@@ -1,0 +1,75 @@
+<UserControl x:Class="RedPDF.Controls.AnnotationPopup"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             mc:Ignorable="d"
+             d:DesignWidth="200"
+             d:DesignHeight="40">
+    
+    <UserControl.Resources>
+        <DropShadowEffect x:Key="PopupShadow"
+                          BlurRadius="10"
+                          ShadowDepth="4"
+                          Direction="270"
+                          Color="#000000"
+                          Opacity="0.4"/>
+    </UserControl.Resources>
+
+    <!-- Floating annotation toolbar that appears on text selection -->
+    <Border Background="#2D2D30"
+            BorderBrush="#3C3C3C"
+            BorderThickness="1"
+            CornerRadius="6"
+            Padding="4"
+            Effect="{StaticResource PopupShadow}">
+        <StackPanel Orientation="Horizontal">
+            <!-- Highlight -->
+            <Button x:Name="HighlightButton"
+                    ToolTip="Highlight"
+                    Click="OnHighlight"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="8,4"
+                    Cursor="Hand">
+                <Image Source="{StaticResource HighlightIcon}" Width="18" Height="18"/>
+            </Button>
+            
+            <!-- Underline -->
+            <Button x:Name="UnderlineButton"
+                    ToolTip="Underline"
+                    Click="OnUnderline"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="8,4"
+                    Cursor="Hand">
+                <Image Source="{StaticResource UnderlineIcon}" Width="18" Height="18"/>
+            </Button>
+            
+            <!-- Add Note -->
+            <Button x:Name="NoteButton"
+                    ToolTip="Add Note"
+                    Click="OnAddNote"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="8,4"
+                    Cursor="Hand">
+                <Image Source="{StaticResource StickyNoteIcon}" Width="18" Height="18"/>
+            </Button>
+            
+            <Border Width="1" Background="#4D4D4D" Margin="4,2"/>
+            
+            <!-- Copy Text -->
+            <Button x:Name="CopyButton"
+                    ToolTip="Copy Text"
+                    Click="OnCopyText"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Padding="8,4"
+                    Cursor="Hand">
+                <TextBlock Text="📋" FontSize="14"/>
+            </Button>
+        </StackPanel>
+    </Border>
+</UserControl>

@@ -380,6 +380,7 @@
                                                Document="{Binding CurrentDocument}"
                                                Zoom="{Binding ZoomLevel}"
                                                CurrentPageIndex="{Binding CurrentPage, Mode=TwoWay}"
+                                               AnnotationService="{Binding AnnotationService}"
                                                Visibility="{Binding IsDocumentLoaded, Converter={StaticResource BoolToVisibility}}"/>
                     
                     <!-- Loading Overlay -->

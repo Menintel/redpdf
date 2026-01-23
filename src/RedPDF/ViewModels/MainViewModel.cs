@@ -73,6 +73,15 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private int _totalResults;
 
+    // Annotation properties
+    private readonly IAnnotationService _annotationService = new AnnotationService();
+
+    [ObservableProperty]
+    private AnnotationMode _currentAnnotationMode = AnnotationMode.None;
+
+    [ObservableProperty]
+    private bool _hasUnsavedAnnotations;
+
     public MainViewModel() : this(new PdfService(), new PageCacheService())
     {
     }
@@ -81,6 +90,7 @@ public partial class MainViewModel : ViewModelBase
     {
         _pdfService = pdfService;
         _cacheService = cacheService;
+        _annotationService.AnnotationsChanged += (_, _) => HasUnsavedAnnotations = true;
         Title = "RedPDF";
     }
 
@@ -316,6 +326,91 @@ public partial class MainViewModel : ViewModelBase
 
     #endregion
 
+    #region Annotation Commands
+
+    [RelayCommand]
+    private void SetHighlightMode()
+    {
+        CurrentAnnotationMode = CurrentAnnotationMode == AnnotationMode.Highlight 
+            ? AnnotationMode.None 
+            : AnnotationMode.Highlight;
+        StatusMessage = CurrentAnnotationMode == AnnotationMode.Highlight 
+            ? "Highlight mode: Click and drag to highlight" 
+            : "Ready";
+    }
+
+    [RelayCommand]
+    private void SetUnderlineMode()
+    {
+        CurrentAnnotationMode = CurrentAnnotationMode == AnnotationMode.Underline 
+            ? AnnotationMode.None 
+            : AnnotationMode.Underline;
+        StatusMessage = CurrentAnnotationMode == AnnotationMode.Underline 
+            ? "Underline mode: Click and drag to underline" 
+            : "Ready";
+    }
+
+    [RelayCommand]
+    private void SetStickyNoteMode()
+    {
+        CurrentAnnotationMode = CurrentAnnotationMode == AnnotationMode.StickyNote 
+            ? AnnotationMode.None 
+            : AnnotationMode.StickyNote;
+        StatusMessage = CurrentAnnotationMode == AnnotationMode.StickyNote 
+            ? "Note mode: Click to add a note" 
+            : "Ready";
+    }
+
+    [RelayCommand]
+    private void ClearAnnotationMode()
+    {
+        CurrentAnnotationMode = AnnotationMode.None;
+        StatusMessage = "Ready";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSaveAnnotations))]
+    private async Task SaveAnnotationsAsync()
+    {
+        if (string.IsNullOrEmpty(CurrentFilePath))
+            return;
+
+        var dialog = new SaveFileDialog
+        {
+            Filter = "PDF Files (*.pdf)|*.pdf",
+            DefaultExt = ".pdf",
+            FileName = Path.GetFileNameWithoutExtension(CurrentFilePath) + "_annotated.pdf"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            try
+            {
+                IsBusy = true;
+                StatusMessage = "Saving annotations...";
+                await _annotationService.SaveToPdfAsync(CurrentFilePath, dialog.FileName);
+                HasUnsavedAnnotations = false;
+                StatusMessage = $"Saved to {Path.GetFileName(dialog.FileName)}";
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Save failed: {ex.Message}";
+            }
+            finally
+            {
+                IsBusy = false;
+            }
+        }
+    }
+
+    private bool CanSaveAnnotations() => IsDocumentLoaded && _annotationService.Annotations.Count > 0;
+
+    /// <summary>
+    /// Exposes annotation service for controls.
+    /// </summary>
+    public IAnnotationService AnnotationService => _annotationService;
+
+    #endregion
+
     private bool CanNavigate() => IsDocumentLoaded && TotalPages > 0;
 
     private async Task LoadDocumentAsync(string filePath)
@@ -468,4 +563,15 @@ public partial class SearchResultViewModel : ObservableObject
 
     [ObservableProperty]
     private int _resultIndex;
+}
+
+/// <summary>
+/// Annotation mode for the PDF viewer.
+/// </summary>
+public enum AnnotationMode
+{
+    None,
+    Highlight,
+    Underline,
+    StickyNote
 }

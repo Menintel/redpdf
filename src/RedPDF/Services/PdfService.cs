@@ -164,6 +164,28 @@ public class PdfService : IPdfService
         });
     }
 
+    public Task<IEnumerable<TextCharacter>> GetTextCharactersAsync(int pageIndex)
+    {
+        return Task.Run(() =>
+        {
+            if (_currentReader == null || _currentDocument == null)
+            {
+                throw new InvalidOperationException("No document is currently loaded.");
+            }
+
+            using var pageReader = _currentReader.GetPageReader(pageIndex);
+            var characters = pageReader.GetCharacters();
+
+            return characters.Select(c => new TextCharacter(
+                Char: c.Char,
+                Left: c.Box.Left,
+                Top: c.Box.Top,
+                Right: c.Box.Right,
+                Bottom: c.Box.Bottom
+            ));
+        });
+    }
+
     public async Task<IEnumerable<SearchResult>> SearchAsync(string searchText, bool caseSensitive = false)
     {
         if (_currentReader == null || _currentDocument == null)

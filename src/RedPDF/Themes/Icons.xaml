@@ -193,4 +193,72 @@
         </DrawingImage.Drawing>
     </DrawingImage>
     
+    <!-- Annotation Icons -->
+    <DrawingImage x:Key="HighlightIcon">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <!-- Marker pen shape -->
+                <GeometryDrawing Brush="#FFFF00">
+                    <GeometryDrawing.Geometry>
+                        <PathGeometry Figures="M3 10h10v3H3z"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing>
+                    <GeometryDrawing.Pen>
+                        <Pen Brush="#CCCCCC" Thickness="1.5" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+                    </GeometryDrawing.Pen>
+                    <GeometryDrawing.Geometry>
+                        <PathGeometry Figures="M2 6h12 M2 10h12"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+    
+    <DrawingImage x:Key="UnderlineIcon">
+        <DrawingImage.Drawing>
+            <GeometryDrawing>
+                <GeometryDrawing.Pen>
+                    <Pen Brush="#CCCCCC" Thickness="1.5" StartLineCap="Round" EndLineCap="Round"/>
+                </GeometryDrawing.Pen>
+                <GeometryDrawing.Geometry>
+                    <PathGeometry Figures="M4 3v7a4 4 0 0 0 8 0V3 M2 14h12"/>
+                </GeometryDrawing.Geometry>
+            </GeometryDrawing>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+    
+    <DrawingImage x:Key="StickyNoteIcon">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="#3C3C3C">
+                    <GeometryDrawing.Geometry>
+                        <PathGeometry Figures="M3 2h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing>
+                    <GeometryDrawing.Pen>
+                        <Pen Brush="#CCCCCC" Thickness="1.5" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+                    </GeometryDrawing.Pen>
+                    <GeometryDrawing.Geometry>
+                        <PathGeometry Figures="M2 2h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2V2z M5 5h6 M5 8h6 M5 11h4"/>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+    
+    <DrawingImage x:Key="SaveIcon">
+        <DrawingImage.Drawing>
+            <GeometryDrawing>
+                <GeometryDrawing.Pen>
+                    <Pen Brush="#CCCCCC" Thickness="1.5" StartLineCap="Round" EndLineCap="Round" LineJoin="Round"/>
+                </GeometryDrawing.Pen>
+                <GeometryDrawing.Geometry>
+                    <PathGeometry Figures="M3 2h9l2 2v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z M5 2v4h5V2 M5 14v-4h6v4"/>
+                </GeometryDrawing.Geometry>
+            </GeometryDrawing>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+    
 </ResourceDictionary>

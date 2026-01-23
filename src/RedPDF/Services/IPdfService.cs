@@ -53,6 +53,13 @@ public interface IPdfService : IDisposable
     Task<IEnumerable<SearchResult>> SearchAsync(string searchText, bool caseSensitive = false);
 
     /// <summary>
+    /// Gets character information including bounding boxes for a page.
+    /// </summary>
+    /// <param name="pageIndex">Zero-based page index.</param>
+    /// <returns>List of characters with their positions.</returns>
+    Task<IEnumerable<TextCharacter>> GetTextCharactersAsync(int pageIndex);
+
+    /// <summary>
     /// Gets the currently loaded document, or null if none loaded.
     /// </summary>
     PdfDocumentModel? CurrentDocument { get; }
@@ -76,4 +83,15 @@ public record SearchResult(
     string MatchedText,
     int StartIndex,
     int Length
+);
+
+/// <summary>
+/// Represents a single character and its bounding box on a page.
+/// </summary>
+public record TextCharacter(
+    char Char,
+    int Left,
+    int Top,
+    int Right,
+    int Bottom
 );

@@ -78,6 +78,19 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         set => SetValue(CurrentPageIndexProperty, value);
     }
 
+    public static readonly DependencyProperty AnnotationServiceProperty =
+        DependencyProperty.Register(
+            nameof(AnnotationService),
+            typeof(IAnnotationService),
+            typeof(PdfViewerControl),
+            new PropertyMetadata(null));
+
+    public IAnnotationService? AnnotationService
+    {
+        get => (IAnnotationService?)GetValue(AnnotationServiceProperty);
+        set => SetValue(AnnotationServiceProperty, value);
+    }
+
     #endregion
 
     public PdfViewerControl()
@@ -97,6 +110,91 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 
         // Subscribe to scroll events for virtual rendering
         PageScrollViewer.ScrollChanged += OnScrollChanged;
+        
+        // Handle annotation selection bubbling from overlays
+        AddHandler(AnnotationOverlay.TextSelectionChangedEvent, new RoutedEventHandler(OnTextSelectionChanged));
+    }
+
+    private void OnTextSelectionChanged(object sender, RoutedEventArgs e)
+    {
+        if (e is AnnotationSelectionEventArgs args && sender is AnnotationOverlay overlay)
+        {
+            if (args.SelectedCharacters.Count == 0)
+            {
+                AnnotationMenu.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            // Position popup near selection
+            var positionInViewer = overlay.TranslatePoint(args.Position, this);
+            
+            // Adjust position to be above selection
+            AnnotationMenu.Margin = new Thickness(positionInViewer.X, Math.Max(0, positionInViewer.Y - 50), 0, 0);
+            AnnotationMenu.Visibility = Visibility.Visible;
+            
+            // Pass data to popup
+            AnnotationMenu.PageIndex = overlay.PageIndex;
+            AnnotationMenu.SelectedText = new string(args.SelectedCharacters.Select(c => c.Char).ToArray());
+            
+            // Convert characters to rects (simplified: one rect per char, but service should merge)
+            AnnotationMenu.SelectionRects = args.SelectedCharacters.Select(c => 
+                new AnnotationRect(c.Left, c.Top, c.Right - c.Left, c.Bottom - c.Top)).ToList();
+        }
+    }
+
+    private void OnHighlightRequested(object sender, AnnotationEventArgs e)
+    {
+        if (AnnotationService == null) return;
+
+        var annotation = new HighlightAnnotation
+        {
+            PageIndex = e.PageIndex,
+            Rects = e.Rects,
+            Color = "#80FFFF00"
+        };
+        AnnotationService.AddAnnotation(annotation);
+        AnnotationMenu.Visibility = Visibility.Collapsed;
+        
+        // Clear selection on active overlay if possible (requires tracking active overlay)
+        // For now, user clicks away to clear
+    }
+
+    private void OnUnderlineRequested(object sender, AnnotationEventArgs e)
+    {
+        if (AnnotationService == null) return;
+
+        var annotation = new UnderlineAnnotation
+        {
+            PageIndex = e.PageIndex,
+            Rects = e.Rects,
+            Color = "#FFFF0000"
+        };
+        AnnotationService.AddAnnotation(annotation);
+        AnnotationMenu.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnNoteRequested(object sender, AnnotationEventArgs e)
+    {
+        if (AnnotationService == null) return;
+
+        // Use the first rect position for the note
+        var firstRect = e.Rects.FirstOrDefault();
+        
+        var annotation = new StickyNoteAnnotation
+        {
+            PageIndex = e.PageIndex,
+            X = firstRect.X + firstRect.Width, // Place at end of selection
+            Y = firstRect.Y,
+            Content = "New Note",
+            IsExpanded = true
+        };
+        AnnotationService.AddAnnotation(annotation);
+        AnnotationMenu.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnCopyRequested(object sender, TextEventArgs e)
+    {
+        AnnotationMenu.Visibility = Visibility.Collapsed;
     }
 
     private static void OnDocumentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -276,12 +374,16 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
                         _zoomLevel,
                         () => RenderPageDirectlyAsync(index, _zoomLevel, cancellationToken));
 
+                    // Fetch characters for selection
+                    var characters = await GetPageCharactersDirectlyAsync(index, cancellationToken);
+
                     if (!cancellationToken.IsCancellationRequested)
                     {
                         // Update on UI thread
                         await Dispatcher.InvokeAsync(() =>
                         {
                             pageVm.RenderedImage = bitmap;
+                            pageVm.Characters = characters;
                             pageVm.RenderedScale = _zoomLevel;
                         });
                     }
@@ -374,6 +476,24 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
             cancellationToken.ThrowIfCancellationRequested();
 
             return ConvertToBitmapSource(rawBytes, renderWidth, renderHeight);
+        }, cancellationToken);
+
+    }
+
+    private Task<List<TextCharacter>> GetPageCharactersDirectlyAsync(int pageIndex, CancellationToken cancellationToken)
+    {
+        var doc = Document;
+        if (doc == null || !File.Exists(doc.FilePath)) return Task.FromResult(new List<TextCharacter>());
+
+        var filePath = doc.FilePath;
+
+        return Task.Run(() =>
+        {
+            using var docReader = DocLib.Instance.GetDocReader(filePath, new PageDimensions(1.0));
+            using var pageReader = docReader.GetPageReader(pageIndex);
+            
+            var chars = pageReader.GetCharacters();
+            return chars.Select(c => new TextCharacter(c.Char, c.Box.Left, c.Box.Top, c.Box.Right, c.Box.Bottom)).ToList();
         }, cancellationToken);
     }
 
@@ -505,6 +625,8 @@ public class PageViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(RenderedScale));
         }
     }
+
+    public List<TextCharacter> Characters { get; set; } = [];
 
     protected virtual void OnPropertyChanged(string propertyName)
     {
