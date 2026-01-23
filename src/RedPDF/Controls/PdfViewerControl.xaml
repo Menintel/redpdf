@@ -8,6 +8,15 @@
              d:DesignWidth="800"
              Background="#1E1E1E">
     
+    <UserControl.Resources>
+        <DropShadowEffect x:Key="PageShadow"
+                          BlurRadius="10"
+                          ShadowDepth="2"
+                          Direction="270"
+                          Color="#000000"
+                          Opacity="0.3"/>
+    </UserControl.Resources>
+    
     <Grid>
         <!-- Loading Overlay -->
         <Border x:Name="LoadingOverlay"
@@ -59,13 +68,4 @@
             </ItemsControl>
         </ScrollViewer>
     </Grid>
-    
-    <UserControl.Resources>
-        <DropShadowEffect x:Key="PageShadow"
-                          BlurRadius="10"
-                          ShadowDepth="2"
-                          Direction="270"
-                          Color="#000000"
-                          Opacity="0.3"/>
-    </UserControl.Resources>
 </UserControl>

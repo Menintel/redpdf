@@ -1,8 +1,13 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Docnet.Core;
+using Docnet.Core.Models;
 using RedPDF.Models;
 using RedPDF.Services;
 
@@ -14,7 +19,6 @@ namespace RedPDF.Controls;
 /// </summary>
 public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 {
-    private readonly IPdfService _pdfService;
     private readonly ICacheService _cacheService;
     private double _zoomLevel = 1.0;
     private int _currentPage;
@@ -66,14 +70,9 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 
     #endregion
 
-    public PdfViewerControl() : this(new PdfService(), new PageCacheService())
+    public PdfViewerControl()
     {
-    }
-
-    public PdfViewerControl(IPdfService pdfService, ICacheService cacheService)
-    {
-        _pdfService = pdfService;
-        _cacheService = cacheService;
+        _cacheService = new PageCacheService();
 
         InitializeComponent();
 
@@ -136,6 +135,10 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
             // Render visible pages
             await RenderVisiblePagesAsync();
         }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error loading document: {ex}");
+        }
         finally
         {
             LoadingOverlay.Visibility = Visibility.Collapsed;
@@ -177,7 +180,7 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
                         Document.Id,
                         index,
                         _zoomLevel,
-                        () => _pdfService.RenderPageAsync(index, _zoomLevel));
+                        () => RenderPageDirectlyAsync(index, _zoomLevel));
 
                     pageVm.RenderedImage = bitmap;
                     pageVm.RenderedScale = _zoomLevel;
@@ -190,6 +193,62 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Renders a page directly using Docnet, without relying on shared service state.
+    /// </summary>
+    private Task<BitmapSource> RenderPageDirectlyAsync(int pageIndex, double scale)
+    {
+        // Capture document info on UI thread before entering background task
+        var doc = Document;
+        if (doc == null || !File.Exists(doc.FilePath))
+        {
+            return Task.FromException<BitmapSource>(
+                new InvalidOperationException("Document not available."));
+        }
+
+        var filePath = doc.FilePath;
+        var page = doc.Pages[pageIndex];
+        int targetWidth = Math.Max(1, (int)(page.Width * scale));
+        int targetHeight = Math.Max(1, (int)(page.Height * scale));
+
+        return Task.Run(() =>
+        {
+            // Create a reader directly with the document file
+            using var docReader = DocLib.Instance.GetDocReader(
+                filePath,
+                new PageDimensions(targetWidth, targetHeight));
+
+            using var pageReader = docReader.GetPageReader(pageIndex);
+
+            var rawBytes = pageReader.GetImage();
+            int renderWidth = pageReader.GetPageWidth();
+            int renderHeight = pageReader.GetPageHeight();
+
+            return ConvertToBitmapSource(rawBytes, renderWidth, renderHeight);
+        });
+    }
+
+    private static BitmapSource ConvertToBitmapSource(byte[] rawBytes, int width, int height)
+    {
+        int stride = width * 4;
+
+        var bitmap = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgra32, null);
+
+        bitmap.Lock();
+        try
+        {
+            Marshal.Copy(rawBytes, 0, bitmap.BackBuffer, rawBytes.Length);
+            bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
+        }
+        finally
+        {
+            bitmap.Unlock();
+        }
+
+        bitmap.Freeze();
+        return bitmap;
+    }
+
     private List<int> GetVisiblePageIndices()
     {
         var indices = new List<int>();
@@ -197,14 +256,13 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         if (Pages.Count == 0)
             return indices;
 
-        // Calculate which pages are visible based on scroll position
         double scrollOffset = PageScrollViewer.VerticalOffset;
         double viewportHeight = PageScrollViewer.ViewportHeight;
 
         double currentY = 0;
         for (int i = 0; i < Pages.Count; i++)
         {
-            double pageHeight = Pages[i].Height * _zoomLevel + 16; // Include margin
+            double pageHeight = Pages[i].Height * _zoomLevel + 16;
 
             if (currentY + pageHeight > scrollOffset && currentY < scrollOffset + viewportHeight)
             {
@@ -213,12 +271,10 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 
             currentY += pageHeight;
 
-            // Optimization: stop if we're past the viewport
             if (currentY > scrollOffset + viewportHeight)
                 break;
         }
 
-        // Always include at least the first page
         if (indices.Count == 0 && Pages.Count > 0)
         {
             indices.Add(0);
@@ -229,7 +285,6 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 
     private void OnScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        // Only react to vertical scroll changes
         if (Math.Abs(e.VerticalChange) > 0.1)
         {
             RefreshVisiblePages();
@@ -252,11 +307,10 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
         if (pageIndex < 0 || pageIndex >= Pages.Count)
             return;
 
-        // Calculate vertical offset for the page
         double offset = 0;
         for (int i = 0; i < pageIndex; i++)
         {
-            offset += Pages[i].Height * _zoomLevel + 16; // Include margin
+            offset += Pages[i].Height * _zoomLevel + 16;
         }
 
         PageScrollViewer.ScrollToVerticalOffset(offset);

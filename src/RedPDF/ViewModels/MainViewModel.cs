@@ -65,15 +65,27 @@ public partial class MainViewModel : ViewModelBase
     [RelayCommand]
     private async Task OpenFileAsync()
     {
-        var dialog = new OpenFileDialog
+        try
         {
-            Filter = "PDF Files (*.pdf)|*.pdf|All Files (*.*)|*.*",
-            Title = "Open PDF Document"
-        };
+            var dialog = new OpenFileDialog
+            {
+                Filter = "PDF Files (*.pdf)|*.pdf|All Files (*.*)|*.*",
+                Title = "Open PDF Document"
+            };
 
-        if (dialog.ShowDialog() == true)
+            if (dialog.ShowDialog() == true)
+            {
+                await LoadDocumentAsync(dialog.FileName);
+            }
+        }
+        catch (Exception ex)
         {
-            await LoadDocumentAsync(dialog.FileName);
+            System.Diagnostics.Debug.WriteLine($"OpenFile Error: {ex}");
+            System.Windows.MessageBox.Show(
+                $"Unexpected error:\n\n{ex.Message}",
+                "Error",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
         }
     }
 
@@ -171,7 +183,11 @@ public partial class MainViewModel : ViewModelBase
             IsBusy = true;
             StatusMessage = "Loading document...";
 
+            System.Diagnostics.Debug.WriteLine($"Opening PDF: {filePath}");
+            
             CurrentDocument = await _pdfService.OpenDocumentAsync(filePath);
+
+            System.Diagnostics.Debug.WriteLine($"PDF opened successfully: {CurrentDocument?.PageCount} pages");
 
             CurrentFilePath = filePath;
             FileName = CurrentDocument.FileName;
@@ -187,15 +203,21 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"PDF Load Error: {ex}");
+            
             var errorMsg = ex.InnerException?.Message ?? ex.Message;
             StatusMessage = $"Error: {errorMsg}";
-            System.Diagnostics.Debug.WriteLine($"PDF Load Error: {ex}");
-            System.Windows.MessageBox.Show(
-                $"Failed to open PDF:\n\n{errorMsg}\n\nDetails: {ex.GetType().Name}",
-                "Error Opening PDF",
-                System.Windows.MessageBoxButton.OK,
-                System.Windows.MessageBoxImage.Error);
             IsDocumentLoaded = false;
+            
+            // Use dispatcher to ensure MessageBox shows on UI thread
+            System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
+            {
+                System.Windows.MessageBox.Show(
+                    $"Failed to open PDF:\n\n{errorMsg}\n\nFull error:\n{ex.Message}\n\nType: {ex.GetType().FullName}",
+                    "Error Opening PDF",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            });
         }
         finally
         {
