@@ -16,6 +16,21 @@ public partial class AnnotationOverlay : UserControl
     private readonly List<TextCharacter> _pageCharacters = [];
     private readonly List<TextCharacter> _selectedCharacters = [];
     
+    // NEW: Word/Line hierarchy and spatial indexing
+    private readonly List<TextWord> _pageWords = [];
+    private readonly List<TextLine> _pageLines = [];
+    private SpatialGrid<TextCharacter>? _charSpatialGrid;  // For cursor hit-testing
+    private SpatialGrid<TextWord>? _wordSpatialGrid;       // For selection snapping
+    
+    // NEW: Efficient rendering with DrawingVisual
+    private SelectionVisual? _selectionVisual;
+    
+    // NEW: Double-click tracking for word selection
+    private DateTime _lastClickTime = DateTime.MinValue;
+    private Point _lastClickPoint;
+    private const double DoubleClickTimeMs = 500;
+    private const double DoubleClickDistance = 5;
+    
     // Selection visual
     private readonly SolidColorBrush _selectionBrush = new(Color.FromArgb(100, 51, 153, 255)); // Semi-transparent blue
     
@@ -188,11 +203,146 @@ public partial class AnnotationOverlay : UserControl
     {
         _pageCharacters.Clear();
         _pageCharacters.AddRange(characters);
+        
+        // Build word/line hierarchy
+        BuildTextHierarchy();
+        
+        // Build spatial index
+        RebuildSpatialGrid();
+    }
+    
+    /// <summary>
+    /// Groups characters into words and words into lines based on spatial proximity.
+    /// Filters out invalid/whitespace characters to prevent selection artifacts.
+    /// </summary>
+    private void BuildTextHierarchy()
+    {
+        _pageWords.Clear();
+        _pageLines.Clear();
+        
+        if (_pageCharacters.Count == 0) return;
+        
+        // Filter out whitespace and invalid-sized characters
+        var validChars = _pageCharacters
+            .Where(c => !char.IsWhiteSpace(c.Char) && 
+                       c.Right > c.Left && 
+                       c.Bottom > c.Top &&
+                       (c.Right - c.Left) < 200 &&  // Filter unreasonably wide chars
+                       (c.Bottom - c.Top) < 200)    // Filter unreasonably tall chars
+            .ToList();
+        
+        if (validChars.Count == 0) return;
+        
+        // Group by approximate Y position (lines), then sort by X within line
+        var lineGroups = validChars
+            .GroupBy(c => (int)(c.Top / 10) * 10)  // Group by Y in 10px buckets
+            .OrderBy(g => g.Key)
+            .ToList();
+        
+        foreach (var lineGroup in lineGroups)
+        {
+            var lineChars = lineGroup.OrderBy(c => c.Left).ToList();
+            var currentLine = new TextLine();
+            TextWord? currentWord = null;
+            double lastRight = double.MinValue;
+            
+            foreach (var ch in lineChars)
+            {
+                // Detect word break: gap > char width or gap > threshold
+                double avgCharWidth = ch.Right - ch.Left;
+                double gap = ch.Left - lastRight;
+                bool isNewWord = currentWord == null || 
+                                gap > Math.Max(avgCharWidth * 0.5, 5);
+                
+                if (isNewWord && currentWord != null && currentWord.Characters.Count > 0)
+                {
+                    _pageWords.Add(currentWord);
+                    currentLine.AddWord(currentWord);
+                    currentWord = null;
+                }
+                
+                currentWord ??= new TextWord();
+                currentWord.AddCharacter(ch);
+                lastRight = ch.Right;
+            }
+            
+            // Add final word of line
+            if (currentWord != null && currentWord.Characters.Count > 0)
+            {
+                _pageWords.Add(currentWord);
+                currentLine.AddWord(currentWord);
+            }
+            
+            if (currentLine.Words.Count > 0)
+            {
+                _pageLines.Add(currentLine);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Rebuilds spatial grid using CHARACTERS for precise hit-testing.
+    /// Word bounds are used for selection snapping, character bounds for cursor/hit accuracy.
+    /// </summary>
+    private void RebuildSpatialGrid()
+    {
+        _charSpatialGrid = null;
+        _wordSpatialGrid = null;
+        
+        if (_pageCharacters.Count == 0) return;
+        
+        // Filter valid characters
+        var validChars = _pageCharacters
+            .Where(c => !char.IsWhiteSpace(c.Char) && 
+                       c.Right > c.Left && 
+                       c.Bottom > c.Top)
+            .ToList();
+        
+        if (validChars.Count == 0) return;
+        
+        // Determine page bounds
+        double maxX = validChars.Max(c => c.Right) + 50;
+        double maxY = validChars.Max(c => c.Bottom) + 50;
+        
+        // Build character grid for hit-testing
+        _charSpatialGrid = new SpatialGrid<TextCharacter>(maxX, maxY, 30);
+        foreach (var ch in validChars)
+        {
+            var rect = new Rect(ch.Left, ch.Top, ch.Right - ch.Left, ch.Bottom - ch.Top);
+            _charSpatialGrid.Insert(ch, rect);
+        }
+        
+        // Build word grid for selection snapping
+        if (_pageWords.Count > 0)
+        {
+            _wordSpatialGrid = new SpatialGrid<TextWord>(maxX, maxY, 50);
+            foreach (var word in _pageWords)
+            {
+                _wordSpatialGrid.Insert(word, word.Bounds);
+            }
+        }
     }
 
     private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
-        _startPoint = e.GetPosition(this);
+        var clickPoint = e.GetPosition(this);
+        var now = DateTime.Now;
+        
+        // Check for double-click (word selection)
+        bool isDoubleClick = (now - _lastClickTime).TotalMilliseconds < DoubleClickTimeMs &&
+                            (clickPoint - _lastClickPoint).Length < DoubleClickDistance;
+        
+        _lastClickTime = now;
+        _lastClickPoint = clickPoint;
+        
+        if (isDoubleClick)
+        {
+            // Select entire word under cursor
+            SelectWordAt(clickPoint);
+            return;
+        }
+        
+        _startPoint = clickPoint;
         _isSelecting = true;
         ClearSelection();
         CaptureMouse();
@@ -200,10 +350,30 @@ public partial class AnnotationOverlay : UserControl
         // Notify that selection is cleared
         RaiseEvent(new AnnotationSelectionEventArgs(TextSelectionChangedEvent, [], _startPoint.Value));
     }
+    
+    /// <summary>
+    /// Selects the entire word at the given point (for double-click).
+    /// </summary>
+    private void SelectWordAt(Point point)
+    {
+        if (_wordSpatialGrid == null) return;
+        
+        var word = _wordSpatialGrid.Query(point)
+            .FirstOrDefault(w => w.Bounds.Contains(point));
+        
+        if (word != null)
+        {
+            _selectedCharacters.Clear();
+            _selectedCharacters.AddRange(word.Characters);
+            UpdateSelectionVisual();
+            RaiseEvent(new AnnotationSelectionEventArgs(TextSelectionChangedEvent, _selectedCharacters.ToList(), point));
+        }
+    }
 
     private void OnMouseMove(object sender, MouseEventArgs e)
     {
         var currentPoint = e.GetPosition(this);
+        // System.Diagnostics.Debug.WriteLine($"Mouse: {currentPoint}");
 
         if (_isSelecting && _startPoint.HasValue)
         {
@@ -217,20 +387,10 @@ public partial class AnnotationOverlay : UserControl
 
     private void UpdateCursor(Point point)
     {
-        bool isOverText = false;
-        
-        if (_pageCharacters.Count > 0 && Scale > 0)
-        {
-            foreach (var c in _pageCharacters)
-            {
-                if (point.X >= c.Left * Scale && point.X <= c.Right * Scale &&
-                    point.Y >= c.Top * Scale && point.Y <= c.Bottom * Scale)
-                {
-                    isOverText = true;
-                    break;
-                }
-            }
-        }
+        // O(1) spatial grid query using character bounds for precision
+        bool isOverText = _charSpatialGrid?.Query(point)
+            .Any(c => point.X >= c.Left && point.X <= c.Right && 
+                     point.Y >= c.Top && point.Y <= c.Bottom) ?? false;
         
         Cursor = isOverText ? Cursors.IBeam : Cursors.Arrow;
     }
@@ -259,7 +419,7 @@ public partial class AnnotationOverlay : UserControl
     public void ClearSelection()
     {
         _selectedCharacters.Clear();
-        SelectionLayer.Children.Clear();
+        _selectionVisual?.Clear();
     }
 
     private void UpdateSelection(Point start, Point end)
@@ -272,35 +432,50 @@ public partial class AnnotationOverlay : UserControl
         
         var selectionRect = new Rect(x, y, width, height);
         
-        // 2. Find intersecting characters
+        // 2. Clear previous selection
         _selectedCharacters.Clear();
-        SelectionLayer.Children.Clear();
-
-        foreach (var charInfo in _pageCharacters)
+        
+        // 3. Adobe-style: word-based selection
+        //    Find all words that intersect the selection rect
+        if (_wordSpatialGrid != null)
         {
-            double charLeft = charInfo.Left * Scale;
-            double charTop = charInfo.Top * Scale;
-            double charRight = charInfo.Right * Scale;
-            double charBottom = charInfo.Bottom * Scale;
+            var candidateWords = _wordSpatialGrid.Query(selectionRect)
+                .Where(w => selectionRect.IntersectsWith(w.Bounds))
+                .OrderBy(w => w.Bounds.Top)
+                .ThenBy(w => w.Bounds.Left)
+                .ToList();
             
-            Rect charRect = new Rect(charLeft, charTop, charRight - charLeft, charBottom - charTop);
-            
-            if (selectionRect.IntersectsWith(charRect))
+            foreach (var word in candidateWords)
             {
-                _selectedCharacters.Add(charInfo);
-                
-                // Draw highlight rect
-                var rect = new Rectangle
-                {
-                    Fill = _selectionBrush,
-                    Width = charRect.Width,
-                    Height = charRect.Height
-                };
-                Canvas.SetLeft(rect, charRect.Left);
-                Canvas.SetTop(rect, charRect.Top);
-                SelectionLayer.Children.Add(rect);
+                _selectedCharacters.AddRange(word.Characters);
             }
         }
+        
+        // 4. Efficient rendering via DrawingVisual
+        UpdateSelectionVisual();
+    }
+    
+    /// <summary>
+    /// Updates the DrawingVisual-based selection rendering.
+    /// </summary>
+    private void UpdateSelectionVisual()
+    {
+        // Initialize SelectionVisual on first use
+        if (_selectionVisual == null)
+        {
+            _selectionVisual = new SelectionVisual();
+            // Add to visual tree via the SelectionLayer canvas
+            // We need to host the DrawingVisual in a VisualHost
+            var host = new SelectionVisualHost(_selectionVisual);
+            SelectionLayer.Children.Clear();
+            SelectionLayer.Children.Add(host);
+        }
+        
+        // Build rects from selected characters
+        var rects = _selectedCharacters.Select(c => 
+            new Rect(c.Left, c.Top, c.Right - c.Left, c.Bottom - c.Top));
+        
+        _selectionVisual.Update(rects, _selectionBrush);
     }
 }
 

@@ -374,8 +374,8 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
                         _zoomLevel,
                         () => RenderPageDirectlyAsync(index, _zoomLevel, cancellationToken));
 
-                    // Fetch characters for selection
-                    var characters = await GetPageCharactersDirectlyAsync(index, cancellationToken);
+                    // Fetch characters for selection at the same scale as rendered image
+                    var characters = await GetPageCharactersDirectlyAsync(index, _zoomLevel, cancellationToken);
 
                     if (!cancellationToken.IsCancellationRequested)
                     {
@@ -480,20 +480,35 @@ public partial class PdfViewerControl : UserControl, INotifyPropertyChanged
 
     }
 
-    private Task<List<TextCharacter>> GetPageCharactersDirectlyAsync(int pageIndex, CancellationToken cancellationToken)
+    private Task<List<TextCharacter>> GetPageCharactersDirectlyAsync(int pageIndex, double scale, CancellationToken cancellationToken)
     {
         var doc = Document;
         if (doc == null || !File.Exists(doc.FilePath)) return Task.FromResult(new List<TextCharacter>());
 
         var filePath = doc.FilePath;
+        var page = doc.Pages[pageIndex];
+        
+        // Use the SAME scaled dimensions as the rendered image
+        int targetWidth = Math.Max(1, (int)(page.Width * scale));
+        int targetHeight = Math.Max(1, (int)(page.Height * scale));
 
         return Task.Run(() =>
         {
-            using var docReader = DocLib.Instance.GetDocReader(filePath, new PageDimensions(1.0));
+            // Get characters at the same scale as the rendered image
+            using var docReader = DocLib.Instance.GetDocReader(filePath, new PageDimensions(targetWidth, targetHeight));
             using var pageReader = docReader.GetPageReader(pageIndex);
             
             var chars = pageReader.GetCharacters();
-            return chars.Select(c => new TextCharacter(c.Char, c.Box.Left, c.Box.Top, c.Box.Right, c.Box.Bottom)).ToList();
+
+            // Docnet already returns characters in screen coordinates (Y down from top-left)
+            // when using PageDimensions, so no Y-flip is needed
+            return chars.Select(c => new TextCharacter(
+                c.Char,
+                (int)c.Box.Left,
+                (int)c.Box.Top,
+                (int)c.Box.Right,
+                (int)c.Box.Bottom
+            )).ToList();
         }, cancellationToken);
     }
 
@@ -599,6 +614,7 @@ public class PageViewModel : INotifyPropertyChanged
 {
     private BitmapSource? _renderedImage;
     private double _renderedScale;
+    private List<TextCharacter> _characters = [];
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -626,7 +642,15 @@ public class PageViewModel : INotifyPropertyChanged
         }
     }
 
-    public List<TextCharacter> Characters { get; set; } = [];
+    public List<TextCharacter> Characters
+    {
+        get => _characters;
+        set
+        {
+            _characters = value;
+            OnPropertyChanged(nameof(Characters));
+        }
+    }
 
     protected virtual void OnPropertyChanged(string propertyName)
     {
